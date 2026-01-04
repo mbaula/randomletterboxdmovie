@@ -1,5 +1,3 @@
-import * as cheerio from 'cheerio';
-
 const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 
@@ -7,10 +5,10 @@ export default async function handler(req, res) {
   // Ensure we always return JSON
   res.setHeader('Content-Type', 'application/json');
 
-  const { slug } = req.query;
+  const { title } = req.query;
 
-  if (!slug) {
-    return res.status(400).json({ error: 'Slug is required' });
+  if (!title) {
+    return res.status(400).json({ error: 'Title is required' });
   }
 
   if (!TMDB_API_KEY) {
@@ -18,8 +16,8 @@ export default async function handler(req, res) {
   }
 
   try {
-    // First, get the TMDB ID from Letterboxd page
-    const tmdbId = await getTmdbIdFromLetterboxd(slug);
+    // Search TMDB by title (primary method - no Letterboxd scraping)
+    const tmdbId = await searchTmdbByTitle(title);
 
     if (!tmdbId) {
       return res.status(404).json({ error: 'Movie not found' });
@@ -37,14 +35,22 @@ export default async function handler(req, res) {
   }
 }
 
-async function getTmdbIdFromLetterboxd(slug) {
+async function searchTmdbByTitle(title) {
   try {
-    const url = `https://letterboxd.com/film/${slug}/`;
+    // Extract year if present in title like "Movie Name (1994)"
+    const yearMatch = title.match(/\((\d{4})\)\s*$/);
+    const year = yearMatch ? yearMatch[1] : null;
+    const cleanTitle = title.replace(/\s*\(\d{4}\)\s*$/, '').trim();
+
+    let url = `${TMDB_BASE}/search/movie?query=${encodeURIComponent(cleanTitle)}`;
+    if (year) {
+      url += `&year=${year}`;
+    }
+
     const response = await fetch(url, {
       headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        Authorization: `Bearer ${TMDB_API_KEY}`,
+        'Content-Type': 'application/json',
       },
     });
 
@@ -52,34 +58,16 @@ async function getTmdbIdFromLetterboxd(slug) {
       return null;
     }
 
-    const html = await response.text();
-    const $ = cheerio.load(html);
+    const data = await response.json();
 
-    // Look for data-tmdb-id on body tag (most reliable)
-    const bodyTmdbId = $('body').attr('data-tmdb-id');
-    if (bodyTmdbId) {
-      return bodyTmdbId;
-    }
-
-    // Alternative: look for TMDB link in the page
-    const tmdbLink = $('a[href*="themoviedb.org/movie/"]').attr('href');
-    if (tmdbLink) {
-      const match = tmdbLink.match(/themoviedb\.org\/movie\/(\d+)/);
-      if (match) {
-        return match[1];
-      }
-    }
-
-    // Try finding it in script tags or meta
-    const scripts = $('script').text();
-    const tmdbMatch = scripts.match(/"tmdbId"\s*:\s*(\d+)/);
-    if (tmdbMatch) {
-      return tmdbMatch[1];
+    if (data.results && data.results.length > 0) {
+      // Return the first (most relevant) result
+      return data.results[0].id.toString();
     }
 
     return null;
   } catch (error) {
-    console.error('Error scraping Letterboxd:', error);
+    console.error('TMDB search failed:', error);
     return null;
   }
 }
@@ -119,4 +107,3 @@ async function fetchTmdbDetails(tmdbId) {
     tmdbId,
   };
 }
-

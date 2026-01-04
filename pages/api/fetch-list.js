@@ -18,16 +18,28 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Invalid Letterboxd list URL' });
     }
 
-    // Try RSS feed first
-    let films = await tryRssFeed(listPath);
+    // Try both methods and combine results
+    const [rssFilms, scrapedFilms] = await Promise.all([
+      tryRssFeed(listPath),
+      scrapeAllPages(listPath),
+    ]);
 
-    // If RSS fails or returns empty, fall back to scraping
-    if (!films || films.length === 0) {
-      films = await scrapeList(listPath);
+    // Prefer scraped results (more complete), fallback to RSS
+    let films = [];
+    if (scrapedFilms && scrapedFilms.length > 0) {
+      films = scrapedFilms;
+    } else if (rssFilms && rssFilms.length > 0) {
+      films = rssFilms;
     }
 
     // Dedupe by Letterboxd slug
     const uniqueFilms = dedupeFilms(films);
+
+    if (uniqueFilms.length === 0) {
+      return res.status(404).json({ 
+        error: 'Could not fetch list. The list may be private or temporarily unavailable.' 
+      });
+    }
 
     return res.status(200).json({ films: uniqueFilms });
   } catch (error) {
@@ -49,18 +61,38 @@ function extractListPath(url) {
   return null;
 }
 
+async function fetchWithRetry(url, options, retries = 2) {
+  for (let i = 0; i <= retries; i++) {
+    try {
+      const response = await fetch(url, options);
+      if (response.ok) {
+        return response;
+      }
+      // If we get a non-ok response, wait and retry
+      if (i < retries) {
+        await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+      }
+    } catch (error) {
+      if (i === retries) throw error;
+      await new Promise((r) => setTimeout(r, 500 * (i + 1)));
+    }
+  }
+  return null;
+}
+
 async function tryRssFeed(listPath) {
   try {
     const rssUrl = `https://letterboxd.com${listPath}/rss/`;
-    const response = await fetch(rssUrl, {
+    const response = await fetchWithRetry(rssUrl, {
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         Accept: 'application/rss+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
       },
     });
 
-    if (!response.ok) {
+    if (!response || !response.ok) {
       return null;
     }
 
@@ -83,8 +115,11 @@ async function tryRssFeed(listPath) {
       const year = item['letterboxd:filmYear']?.[0] || '';
       const slug = link.match(/letterboxd\.com\/film\/([^/]+)/)?.[1] || '';
 
+      // Format title with year if available
+      const formattedTitle = year ? `${title} (${year})` : title;
+
       return {
-        title,
+        title: formattedTitle,
         year,
         slug,
         letterboxdUrl: link,
@@ -98,68 +133,86 @@ async function tryRssFeed(listPath) {
   }
 }
 
-async function scrapeList(listPath) {
+async function scrapeAllPages(listPath) {
   const films = [];
   let page = 1;
   let hasMore = true;
+  let consecutiveFailures = 0;
 
-  while (hasMore) {
+  while (hasMore && consecutiveFailures < 2) {
     const pageUrl =
       page === 1
         ? `https://letterboxd.com${listPath}/`
         : `https://letterboxd.com${listPath}/page/${page}/`;
 
-    const response = await fetch(pageUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-    });
+    try {
+      const response = await fetchWithRetry(pageUrl, {
+        headers: {
+          'User-Agent':
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Cache-Control': 'no-cache',
+        },
+      });
 
-    if (!response.ok) {
-      break;
-    }
-
-    const html = await response.text();
-    const $ = cheerio.load(html);
-
-    // Letterboxd uses li.posteritem with data-item-slug on a react component div
-    const filmElements = $('li.posteritem');
-
-    if (filmElements.length === 0) {
-      hasMore = false;
-      break;
-    }
-
-    filmElements.each((_, el) => {
-      const $el = $(el);
-      // The slug is in data-item-slug on the react component div
-      const $reactComponent = $el.find('div[data-item-slug]');
-      const slug = $reactComponent.attr('data-item-slug') || '';
-      const title = $reactComponent.attr('data-item-name') || '';
-
-      if (slug) {
-        films.push({
-          title,
-          year: '', // Will be fetched from TMDB
-          slug,
-          letterboxdUrl: `https://letterboxd.com/film/${slug}/`,
-        });
+      if (!response || !response.ok) {
+        consecutiveFailures++;
+        if (page === 1) {
+          // If first page fails, break immediately
+          break;
+        }
+        continue;
       }
-    });
 
-    // Check for next page - look for pagination link
-    const hasNextPage = $('a.next').length > 0 || $('a[rel="next"]').length > 0;
-    if (!hasNextPage) {
-      hasMore = false;
-    } else {
-      page++;
-    }
+      consecutiveFailures = 0; // Reset on success
 
-    // Safety limit
-    if (page > 50) {
-      hasMore = false;
+      const html = await response.text();
+      const $ = cheerio.load(html);
+
+      // Letterboxd uses li.posteritem with data-item-slug on a react component div
+      const filmElements = $('li.posteritem');
+
+      if (filmElements.length === 0) {
+        hasMore = false;
+        break;
+      }
+
+      filmElements.each((_, el) => {
+        const $el = $(el);
+        // The slug is in data-item-slug on the react component div
+        const $reactComponent = $el.find('div[data-item-slug]');
+        const slug = $reactComponent.attr('data-item-slug') || '';
+        const title = $reactComponent.attr('data-item-name') || '';
+
+        if (slug && title) {
+          films.push({
+            title,
+            year: '', // Will be extracted from title if present
+            slug,
+            letterboxdUrl: `https://letterboxd.com/film/${slug}/`,
+          });
+        }
+      });
+
+      // Check for next page - look for pagination link
+      const hasNextPage = $('a.next').length > 0 || $('a[rel="next"]').length > 0;
+      if (!hasNextPage) {
+        hasMore = false;
+      } else {
+        page++;
+      }
+
+      // Safety limit
+      if (page > 50) {
+        hasMore = false;
+      }
+    } catch (error) {
+      console.error(`Error scraping page ${page}:`, error);
+      consecutiveFailures++;
+      if (page === 1) {
+        break;
+      }
     }
   }
 
@@ -176,4 +229,3 @@ function dedupeFilms(films) {
     return true;
   });
 }
-

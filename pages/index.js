@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef } from 'react';
 import Head from 'next/head';
 
 export default function Home() {
@@ -10,6 +10,14 @@ export default function Home() {
   const [error, setError] = useState('');
   const [listLoaded, setListLoaded] = useState(false);
 
+  // Cache: store fetched list and the URL it was fetched for
+  const cache = useRef({ url: '', films: [] });
+
+  const normalizeUrl = (inputUrl) => {
+    // Normalize URL for comparison (trim, remove trailing slashes, lowercase)
+    return inputUrl.trim().replace(/\/+$/, '').toLowerCase();
+  };
+
   const fetchList = async () => {
     if (!url.trim()) {
       setError('Please enter a Letterboxd list URL');
@@ -18,6 +26,18 @@ export default function Home() {
 
     if (!url.includes('letterboxd.com') || !url.includes('/list/')) {
       setError('Please enter a valid Letterboxd list URL');
+      return;
+    }
+
+    const normalizedUrl = normalizeUrl(url);
+
+    // Check cache - if same URL, just pick a new movie
+    if (cache.current.url === normalizedUrl && cache.current.films.length > 0) {
+      setFilms(cache.current.films);
+      setListLoaded(true);
+      setError('');
+      setSelectedMovie(null);
+      pickRandomMovie(cache.current.films);
       return;
     }
 
@@ -48,9 +68,12 @@ export default function Home() {
         throw new Error(data.error || 'Failed to fetch list');
       }
 
-      if (data.films.length === 0) {
+      if (!data.films || data.films.length === 0) {
         throw new Error('No films found in this list');
       }
+
+      // Update cache
+      cache.current = { url: normalizedUrl, films: data.films };
 
       setFilms(data.films);
       setListLoaded(true);
@@ -76,9 +99,11 @@ export default function Home() {
       const randomFilm = filmList[randomIndex];
 
       try {
-        const response = await fetch(
-          `/api/movie-details?slug=${encodeURIComponent(randomFilm.slug)}`
-        );
+        // Use TMDB search by title
+        const params = new URLSearchParams({
+          title: randomFilm.title || '',
+        });
+        const response = await fetch(`/api/movie-details?${params}`);
 
         let data;
         const contentType = response.headers.get('content-type');
@@ -260,4 +285,3 @@ export default function Home() {
     </>
   );
 }
-
