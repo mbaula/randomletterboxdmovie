@@ -4,10 +4,17 @@ const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 
 export default async function handler(req, res) {
+  // Ensure we always return JSON
+  res.setHeader('Content-Type', 'application/json');
+
   const { slug } = req.query;
 
   if (!slug) {
     return res.status(400).json({ error: 'Slug is required' });
+  }
+
+  if (!TMDB_API_KEY) {
+    return res.status(500).json({ error: 'TMDB API key not configured' });
   }
 
   try {
@@ -24,7 +31,9 @@ export default async function handler(req, res) {
     return res.status(200).json(details);
   } catch (error) {
     console.error('Error fetching movie details:', error);
-    return res.status(500).json({ error: 'Failed to fetch movie details' });
+    const errorMessage =
+      error instanceof Error ? error.message : 'Failed to fetch movie details';
+    return res.status(500).json({ error: errorMessage });
   }
 }
 

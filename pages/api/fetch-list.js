@@ -2,6 +2,9 @@ import * as cheerio from 'cheerio';
 import { parseStringPromise } from 'xml2js';
 
 export default async function handler(req, res) {
+  // Ensure we always return JSON
+  res.setHeader('Content-Type', 'application/json');
+
   const { url } = req.query;
 
   if (!url) {
@@ -29,7 +32,9 @@ export default async function handler(req, res) {
     return res.status(200).json({ films: uniqueFilms });
   } catch (error) {
     console.error('Error fetching list:', error);
-    return res.status(500).json({ error: 'Failed to fetch list' });
+    const errorMessage =
+      error instanceof Error ? error.message : 'Failed to fetch list';
+    return res.status(500).json({ error: errorMessage });
   }
 }
 

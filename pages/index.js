@@ -30,7 +30,19 @@ export default function Home() {
       const response = await fetch(
         `/api/fetch-list?url=${encodeURIComponent(url)}`
       );
-      const data = await response.json();
+
+      let data;
+      const contentType = response.headers.get('content-type');
+      if (contentType && contentType.includes('application/json')) {
+        data = await response.json();
+      } else {
+        const text = await response.text();
+        throw new Error(
+          response.ok
+            ? 'Invalid response from server'
+            : `Server error: ${text.substring(0, 100)}`
+        );
+      }
 
       if (!response.ok) {
         throw new Error(data.error || 'Failed to fetch list');
@@ -46,7 +58,7 @@ export default function Home() {
       // Automatically pick a random movie
       pickRandomMovie(data.films);
     } catch (err) {
-      setError(err.message);
+      setError(err.message || 'An error occurred while fetching the list');
       setFilms([]);
     } finally {
       setLoading(false);
@@ -67,7 +79,19 @@ export default function Home() {
         const response = await fetch(
           `/api/movie-details?slug=${encodeURIComponent(randomFilm.slug)}`
         );
-        const data = await response.json();
+
+        let data;
+        const contentType = response.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          data = await response.json();
+        } else {
+          const text = await response.text();
+          throw new Error(
+            response.ok
+              ? 'Invalid response from server'
+              : `Server error: ${text.substring(0, 100)}`
+          );
+        }
 
         if (!response.ok) {
           throw new Error(data.error || 'Failed to fetch movie details');
@@ -79,7 +103,7 @@ export default function Home() {
           letterboxdUrl: randomFilm.letterboxdUrl,
         });
       } catch (err) {
-        setError(err.message);
+        setError(err.message || 'An error occurred while fetching movie details');
       } finally {
         setLoadingMovie(false);
       }
