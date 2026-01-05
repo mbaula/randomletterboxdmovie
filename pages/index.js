@@ -1,6 +1,21 @@
 import { useState, useCallback, useRef } from 'react';
 import Head from 'next/head';
 
+// Get rating color class based on Letterboxd rating (out of 5)
+const getRatingColorClass = (rating) => {
+  if (rating >= 4.2) return 'rating-excellent';
+  if (rating >= 3.5) return 'rating-great';
+  if (rating >= 2.5) return 'rating-good';
+  if (rating >= 1.8) return 'rating-mixed';
+  return 'rating-poor';
+};
+
+// Get rating color class for TMDB (out of 10) - convert to same scale
+const getTmdbRatingColorClass = (rating) => {
+  const normalized = rating / 2; // Convert 10-scale to 5-scale
+  return getRatingColorClass(normalized);
+};
+
 export default function Home() {
   const [url, setUrl] = useState('');
   const [films, setFilms] = useState([]);
@@ -258,7 +273,9 @@ export default function Home() {
                               {selectedMovie.letterboxdRating && (
                                 <span className="rating">
                                   <span className="rating-label">Letterboxd:</span>
-                                  <span className="rating-value">{selectedMovie.letterboxdRating}/5</span>
+                                  <span className={`rating-value ${getRatingColorClass(selectedMovie.letterboxdRating)}`}>
+                                    {selectedMovie.letterboxdRating}/5
+                                  </span>
                                 </span>
                               )}
                               {selectedMovie.letterboxdRating && selectedMovie.tmdbRating && (
@@ -267,7 +284,9 @@ export default function Home() {
                               {selectedMovie.tmdbRating && (
                                 <span className="rating">
                                   <span className="rating-label">TMDB:</span>
-                                  <span className="rating-value">{selectedMovie.tmdbRating}/10</span>
+                                  <span className={`rating-value ${getTmdbRatingColorClass(selectedMovie.tmdbRating)}`}>
+                                    {selectedMovie.tmdbRating}/10
+                                  </span>
                                 </span>
                               )}
                             </span>

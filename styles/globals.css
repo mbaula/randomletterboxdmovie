@@ -368,8 +368,28 @@ button:disabled {
 }
 
 .rating-value {
-  color: var(--accent);
   font-weight: 500;
+}
+
+/* Rating color scale based on score */
+.rating-excellent {
+  color: #57e32c; /* 4.4+ */
+}
+
+.rating-great {
+  color: #b7dd29; /* 3.5+ */
+}
+
+.rating-good {
+  color: #ffe234; /* 2.5+ */
+}
+
+.rating-mixed {
+  color: #ffa534; /* 1.8+ */
+}
+
+.rating-poor {
+  color: #ff4545; /* 1+ */
 }
 
 .rating-separator {

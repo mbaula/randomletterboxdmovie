@@ -135,39 +135,46 @@ async function fetchLetterboxdDetails(slug) {
     });
 
     if (!response.ok) {
+      console.error('Letterboxd fetch failed with status:', response.status);
       return null;
     }
 
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // Extract description - try multiple sources
+    // Extract description from meta[name="description"]
     let description = null;
-    
-    // Method 1: Check meta description tag
     const metaDescription = $('meta[name="description"]').attr('content');
-    if (metaDescription && !metaDescription.includes('Letterboxd') && metaDescription.length > 20) {
+    if (metaDescription && metaDescription.trim()) {
       description = metaDescription.trim();
     }
-    
-    // Method 2: Try to get from the film synopsis/description section
-    if (!description) {
-      const synopsis = $('div[class*="synopsis"]').first().text().trim() ||
-                      $('div[class*="truncate"]').first().text().trim() ||
-                      $('p[class*="text"]').first().text().trim();
-      if (synopsis && synopsis.length > 20) {
-        description = synopsis;
+
+    // Extract average rating from twitter:data2 meta tag
+    // Format is typically "3.9 out of 5" or just "3.9"
+    let rating = null;
+    const twitterData2 = $('meta[name="twitter:data2"]').attr('content');
+    console.log('Parsed twitter:data2 value:', twitterData2);
+    if (twitterData2) {
+      // Extract the numeric rating (first 4 chars or match digits)
+      const ratingMatch = twitterData2.match(/^(\d+\.?\d*)/);
+      console.log('Rating match:', ratingMatch);
+      if (ratingMatch) {
+        const parsed = parseFloat(ratingMatch[1]);
+        // Ensure it's a valid rating (0-5)
+        if (parsed >= 0 && parsed <= 5) {
+          rating = parsed;
+        }
       }
     }
 
-    // Method 3: Try structured data
-    if (!description) {
+    // Fallback: Try structured data if twitter meta not found
+    if (!rating) {
       const scripts = $('script[type="application/ld+json"]');
       scripts.each((_, script) => {
         try {
           const jsonData = JSON.parse($(script).html());
-          if (jsonData.description && jsonData.description.length > 20) {
-            description = jsonData.description.trim();
+          if (jsonData.aggregateRating?.ratingValue) {
+            rating = parseFloat(jsonData.aggregateRating.ratingValue);
             return false; // break
           }
         } catch (e) {
@@ -176,45 +183,9 @@ async function fetchLetterboxdDetails(slug) {
       });
     }
 
-    // Extract average rating - Letterboxd shows it in various places
-    let rating = null;
-    
-    // Method 1: Check structured data (most reliable)
-    const scripts = $('script[type="application/ld+json"]');
-    scripts.each((_, script) => {
-      try {
-        const jsonData = JSON.parse($(script).html());
-        if (jsonData.aggregateRating?.ratingValue) {
-          rating = parseFloat(jsonData.aggregateRating.ratingValue);
-          return false; // break
-        }
-      } catch (e) {
-        // Ignore JSON parse errors
-      }
-    });
-
-    // Method 2: Try to find in the stats section
-    if (!rating) {
-      const ratingText = $('meta[property="letterboxd:filmRating"]').attr('content') ||
-                         $('span[class*="rating"]').first().text().trim() ||
-                         $('div[class*="average-rating"]').first().text().trim();
-      
-      if (ratingText) {
-        // Letterboxd ratings are out of 5, sometimes shown as "3.5" or "3.5/5"
-        const ratingMatch = ratingText.match(/(\d+\.?\d*)/);
-        if (ratingMatch) {
-          const parsed = parseFloat(ratingMatch[1]);
-          // Ensure it's a valid rating (0-5)
-          if (parsed >= 0 && parsed <= 5) {
-            rating = parsed;
-          }
-        }
-      }
-    }
-
     return {
       description: description || null,
-      rating: rating ? parseFloat(rating.toFixed(1)) : null,
+      rating: rating ? parseFloat(rating.toFixed(2)) : null,
     };
   } catch (error) {
     console.error('Error fetching Letterboxd details:', error);
