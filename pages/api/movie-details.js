@@ -1,3 +1,5 @@
+import * as cheerio from 'cheerio';
+
 const TMDB_API_KEY = process.env.TMDB_API_KEY;
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 
@@ -5,7 +7,7 @@ export default async function handler(req, res) {
   // Ensure we always return JSON
   res.setHeader('Content-Type', 'application/json');
 
-  const { title } = req.query;
+  const { title, slug } = req.query;
 
   if (!title) {
     return res.status(400).json({ error: 'Title is required' });
@@ -23,8 +25,18 @@ export default async function handler(req, res) {
       return res.status(404).json({ error: 'Movie not found' });
     }
 
-    // Fetch movie details from TMDB
-    const details = await fetchTmdbDetails(tmdbId);
+    // Fetch movie details from TMDB and Letterboxd in parallel
+    const [tmdbDetails, letterboxdData] = await Promise.all([
+      fetchTmdbDetails(tmdbId),
+      slug ? fetchLetterboxdDetails(slug) : Promise.resolve(null),
+    ]);
+
+    // Merge the data
+    const details = {
+      ...tmdbDetails,
+      description: letterboxdData?.description || tmdbDetails.description || null,
+      letterboxdRating: letterboxdData?.rating || null,
+    };
 
     return res.status(200).json(details);
   } catch (error) {
@@ -98,6 +110,8 @@ async function fetchTmdbDetails(tmdbId) {
     year: data.release_date ? data.release_date.split('-')[0] : 'Unknown',
     runtime: data.runtime ? `${data.runtime} min` : 'Unknown',
     director,
+    description: data.overview || null,
+    tmdbRating: data.vote_average ? parseFloat(data.vote_average.toFixed(1)) : null,
     poster: data.poster_path
       ? `https://image.tmdb.org/t/p/w500${data.poster_path}`
       : null,
@@ -106,4 +120,104 @@ async function fetchTmdbDetails(tmdbId) {
       : null,
     tmdbId,
   };
+}
+
+async function fetchLetterboxdDetails(slug) {
+  try {
+    const url = `https://letterboxd.com/film/${slug}/`;
+    const response = await fetch(url, {
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'en-US,en;q=0.9',
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    const html = await response.text();
+    const $ = cheerio.load(html);
+
+    // Extract description - try multiple sources
+    let description = null;
+    
+    // Method 1: Check meta description tag
+    const metaDescription = $('meta[name="description"]').attr('content');
+    if (metaDescription && !metaDescription.includes('Letterboxd') && metaDescription.length > 20) {
+      description = metaDescription.trim();
+    }
+    
+    // Method 2: Try to get from the film synopsis/description section
+    if (!description) {
+      const synopsis = $('div[class*="synopsis"]').first().text().trim() ||
+                      $('div[class*="truncate"]').first().text().trim() ||
+                      $('p[class*="text"]').first().text().trim();
+      if (synopsis && synopsis.length > 20) {
+        description = synopsis;
+      }
+    }
+
+    // Method 3: Try structured data
+    if (!description) {
+      const scripts = $('script[type="application/ld+json"]');
+      scripts.each((_, script) => {
+        try {
+          const jsonData = JSON.parse($(script).html());
+          if (jsonData.description && jsonData.description.length > 20) {
+            description = jsonData.description.trim();
+            return false; // break
+          }
+        } catch (e) {
+          // Ignore JSON parse errors
+        }
+      });
+    }
+
+    // Extract average rating - Letterboxd shows it in various places
+    let rating = null;
+    
+    // Method 1: Check structured data (most reliable)
+    const scripts = $('script[type="application/ld+json"]');
+    scripts.each((_, script) => {
+      try {
+        const jsonData = JSON.parse($(script).html());
+        if (jsonData.aggregateRating?.ratingValue) {
+          rating = parseFloat(jsonData.aggregateRating.ratingValue);
+          return false; // break
+        }
+      } catch (e) {
+        // Ignore JSON parse errors
+      }
+    });
+
+    // Method 2: Try to find in the stats section
+    if (!rating) {
+      const ratingText = $('meta[property="letterboxd:filmRating"]').attr('content') ||
+                         $('span[class*="rating"]').first().text().trim() ||
+                         $('div[class*="average-rating"]').first().text().trim();
+      
+      if (ratingText) {
+        // Letterboxd ratings are out of 5, sometimes shown as "3.5" or "3.5/5"
+        const ratingMatch = ratingText.match(/(\d+\.?\d*)/);
+        if (ratingMatch) {
+          const parsed = parseFloat(ratingMatch[1]);
+          // Ensure it's a valid rating (0-5)
+          if (parsed >= 0 && parsed <= 5) {
+            rating = parsed;
+          }
+        }
+      }
+    }
+
+    return {
+      description: description || null,
+      rating: rating ? parseFloat(rating.toFixed(1)) : null,
+    };
+  } catch (error) {
+    console.error('Error fetching Letterboxd details:', error);
+    return null;
+  }
 }

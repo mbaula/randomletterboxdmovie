@@ -99,9 +99,10 @@ export default function Home() {
       const randomFilm = filmList[randomIndex];
 
       try {
-        // Use TMDB search by title
+        // Use TMDB search by title and pass slug for Letterboxd data
         const params = new URLSearchParams({
           title: randomFilm.title || '',
+          slug: randomFilm.slug || '',
         });
         const response = await fetch(`/api/movie-details?${params}`);
 
@@ -250,7 +251,34 @@ export default function Home() {
                             {selectedMovie.runtime}
                           </span>
                         </div>
+                        {(selectedMovie.letterboxdRating || selectedMovie.tmdbRating) && (
+                          <div className="meta-item">
+                            <span className="meta-label">Ratings</span>
+                            <span className="meta-value ratings">
+                              {selectedMovie.letterboxdRating && (
+                                <span className="rating">
+                                  <span className="rating-label">Letterboxd:</span>
+                                  <span className="rating-value">{selectedMovie.letterboxdRating}/5</span>
+                                </span>
+                              )}
+                              {selectedMovie.letterboxdRating && selectedMovie.tmdbRating && (
+                                <span className="rating-separator"> • </span>
+                              )}
+                              {selectedMovie.tmdbRating && (
+                                <span className="rating">
+                                  <span className="rating-label">TMDB:</span>
+                                  <span className="rating-value">{selectedMovie.tmdbRating}/10</span>
+                                </span>
+                              )}
+                            </span>
+                          </div>
+                        )}
                       </div>
+                      {selectedMovie.description && (
+                        <div className="movie-description">
+                          <p>{selectedMovie.description}</p>
+                        </div>
+                      )}
                       <div className="movie-actions">
                         <a
                           href={`https://letterboxd.com/film/${selectedMovie.slug}/`}
